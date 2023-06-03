@@ -35,6 +35,15 @@
 #include "PowerSessionManager.h"
 #include "disp-power/DisplayLowPower.h"
 
+// defines from drivers/input/touchscreen/xiaomi/xiaomi_touch.h
+#define SET_CUR_VALUE 0
+#define Touch_Doubletap_Mode 14
+
+#define TOUCH_DEV_PATH "/dev/xiaomi-touch"
+#define TOUCH_ID 0
+#define TOUCH_MAGIC 0x5400
+#define TOUCH_IOC_SETMODE TOUCH_MAGIC + SET_CUR_VALUE
+
 namespace aidl {
 namespace google {
 namespace hardware {
@@ -97,12 +106,20 @@ Power::Power(std::shared_ptr<DisplayLowPower> dlpw)
 }
 
 ndk::ScopedAStatus Power::setMode(Mode type, bool enabled) {
+    int fd;
+    int arg[3] = {TOUCH_ID, Touch_Doubletap_Mode, enabled ? 1 : 0};
+
     LOG(DEBUG) << "Power setMode: " << toString(type) << " to: " << enabled;
     if (HintManager::GetInstance()->GetAdpfProfile() &&
         HintManager::GetInstance()->GetAdpfProfile()->mReportingRateLimitNs > 0) {
         PowerSessionManager::getInstance()->updateHintMode(toString(type), enabled);
     }
     switch (type) {
+        case Mode::DOUBLE_TAP_TO_WAKE:
+            fd = open(TOUCH_DEV_PATH, O_RDWR);
+            ioctl(fd, TOUCH_IOC_SETMODE, &arg);
+            close(fd);
+            break;
         case Mode::LOW_POWER:
             mDisplayLowPower->SetDisplayLowPower(enabled);
             if (enabled) {
@@ -151,8 +168,6 @@ ndk::ScopedAStatus Power::setMode(Mode type, bool enabled) {
             if (mVRModeOn || mSustainedPerfModeOn) {
                 break;
             }
-            [[fallthrough]];
-        case Mode::DOUBLE_TAP_TO_WAKE:
             [[fallthrough]];
         case Mode::FIXED_PERFORMANCE:
             [[fallthrough]];
@@ -216,6 +231,9 @@ ndk::ScopedAStatus Power::isModeSupported(Mode type, bool *_aidl_return) {
         supported = true;
     }
     if (!supported && HintManager::GetInstance()->IsAdpfProfileSupported(toString(type))) {
+        supported = true;
+    }
+    if (type == Mode::DOUBLE_TAP_TO_WAKE) {
         supported = true;
     }
     LOG(INFO) << "Power mode " << toString(type) << " isModeSupported: " << supported;
